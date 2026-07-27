@@ -1,0 +1,5 @@
+DEBUG=True
+SECRET_KEY=your-django-secret-key-here
+ORACLE_USER=your_user
+ORACLE_PASSWORD=your_password
+ORACLE_DSN=localhost:1521/orclpdb
