@@ -1,9 +1,27 @@
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth import login
+from django.shortcuts import render, redirect
+
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Device, TrafficEvent, Alert
 from .serializers import DeviceSerializer, TrafficEventSerializer, AlertSerializer
 from . import services
+
+
+def register(request):
+    if request.method == 'POST':
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            return redirect('device-list')
+    else:
+        form = UserCreationForm()
+    return render(request, 'registration/register.html', {'form': form})
+
+
 
 class DeviceViewSet(viewsets.ModelViewSet):
     serializer_class = DeviceSerializer
