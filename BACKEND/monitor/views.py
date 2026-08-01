@@ -1,26 +1,16 @@
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth import login
-from django.shortcuts import render, redirect
-
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+from rest_framework.authtoken.models import Token
+from django.contrib.auth import authenticate
+
 from .models import Device, TrafficEvent, Alert
-from .serializers import DeviceSerializer, TrafficEventSerializer, AlertSerializer
+from .serializers import (
+    DeviceSerializer, TrafficEventSerializer, AlertSerializer, RegisterSerializer
+)
 from . import services
-
-
-def register(request):
-    if request.method == 'POST':
-        form = UserCreationForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            return redirect('device-list')
-    else:
-        form = UserCreationForm()
-    return render(request, 'registration/register.html', {'form': form})
-
 
 
 class DeviceViewSet(viewsets.ModelViewSet):
@@ -56,7 +46,8 @@ class TrafficEventViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return TrafficEvent.objects.filter(device__owner=self.request.user)
+        # Traffic events are displayed in the shared dashboard.
+        return TrafficEvent.objects.select_related('device').all()
 
 
 class AlertViewSet(viewsets.ModelViewSet):
@@ -64,8 +55,61 @@ class AlertViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Alert.objects.filter(event__device__owner=self.request.user)
+        # Alerts are shared across the dashboard so users can see all incident context.
+        return Alert.objects.select_related('event', 'event__device').all()
 
     @action(detail=False, methods=['get'])
     def with_context(self, request):
         return Response(list(services.alerts_with_context(request.user)))
+
+
+class SimulateAttackView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        device_id = request.data.get('device_id')
+        attack_type = request.data.get('attack_type', 'port_scan')
+
+        try:
+            device = Device.objects.get(id=device_id)
+        except Device.DoesNotExist:
+            return Response({'error': 'Device not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if device.owner != request.user:
+            return Response({'error': 'Device does not belong to the authenticated user'}, status=status.HTTP_403_FORBIDDEN)
+
+        result = services.simulate_attack(device, attack_type)
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class RegisterAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            token, _ = Token.objects.get_or_create(user=user)
+            return Response({'token': token.key, 'username': user.username}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class LoginAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(username=username, password=password)
+        if user:
+            token, _ = Token.objects.get_or_create(user=user)
+            return Response({'token': token.key, 'username': user.username})
+        return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class LogoutAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        request.user.auth_token.delete()
+        return Response({'message': 'Logged out'})
